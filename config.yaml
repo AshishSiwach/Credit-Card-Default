@@ -1,0 +1,59 @@
+data_path: data/raw/default of credit card clients.xls
+output_dir: artifacts
+
+random_state: 42
+test_size: 0.2
+# Used for both model-selection CV and the out-of-fold threshold search.
+cv_folds: 5
+# average_precision, not accuracy: the target is ~78/22 imbalanced,
+# and accuracy rewards a model that just predicts the majority class.
+cv_scoring: average_precision
+
+# Recall maximised subject to this precision floor. For a credit-risk
+# model, missing an actual defaulter is assumed costlier than an
+# unnecessary review of a non-defaulter, down to this floor.
+min_precision: 0.45
+
+model:
+  type: xgboost
+  # XGBoost has no class_weight; derive scale_pos_weight (negatives /
+  # positives) from the training labels rather than hardcoding it.
+  auto_scale_pos_weight: true
+  params:
+    n_estimators: 200
+    max_depth: 4
+    learning_rate: 0.05
+    eval_metric: logloss
+
+# Reference model run through the identical code path, so the main
+# model's numbers can be judged against something simpler. Remove this
+# section to skip it.
+baseline:
+  type: logistic_regression
+  class_weight_balanced: true
+  params:
+    max_iter: 1000
+
+# Floors for `python -m credit_default.sensitivity`: how recall and
+# review workload change if the business assumption above is different.
+sensitivity_floors: [0.35, 0.45, 0.55]
+
+# Candidates for `python -m credit_default.compare`: a linear baseline, a
+# shallow tree, and XGBoost with and without class weighting, so the
+# effect of imbalance handling and of the operating point is visible.
+comparison:
+  - name: logistic_regression_balanced
+    type: logistic_regression
+    class_weight_balanced: true
+    params: {max_iter: 1000}
+  - name: decision_tree_balanced_depth10
+    type: decision_tree
+    class_weight_balanced: true
+    params: {max_depth: 10}
+  - name: xgboost_unweighted
+    type: xgboost
+    params: {eval_metric: logloss}
+  - name: xgboost_weighted
+    type: xgboost
+    auto_scale_pos_weight: true
+    params: {n_estimators: 200, max_depth: 4, learning_rate: 0.05, eval_metric: logloss}
