@@ -242,20 +242,7 @@ floor changes.
 - **No cost data.** The precision floor is an assumption, not a derived
   optimum.
 
-## Production considerations
 
-Not implemented here; what a deployment would add:
-
-- **Monitoring:** population stability index on `LIMIT_BAL`, `BILL_AMT*`
-  and `PAY_AMT*`; score-distribution drift; realised default rate versus
-  predicted over each monitoring window.
-- **Evaluation:** randomise flagged accounts into model-driven review
-  versus the existing process; primary metrics are realised default rate
-  and write-off value over a fixed window, secondary is review workload
-  and cost per prevented default.
-- **Retraining:** cadence set from drift monitoring; quarterly is a
-  reasonable starting assumption given the macro-sensitivity of
-  repayment behaviour.
 
 ## License
 
