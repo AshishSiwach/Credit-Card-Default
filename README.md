@@ -149,7 +149,25 @@ Gain: +0.0028 (+0.44 current-CV standard deviations). The gain is within CV nois
 | PAY_4 | 0.054 | 2.8% | +0.71 |
 | PAY_6 | 0.053 | 2.7% | +0.29 |
 
-SHAP values describe what the model relies on, not causal effects. The rank correlation is a one-number summary and can hide non-monotone relationships (e.g. `PAY_0` status codes are not ordered quantities).
+Importance by feature group:
+
+| Group | Features | Share of total importance |
+|---|---|---|
+| Repayment status | PAY_0, PAY_2–PAY_6 | 43.7% |
+| Payment amounts | PAY_AMT1–6 | 22.6% |
+| Bill amounts | BILL_AMT1–6 | 15.4% |
+| Credit limit | LIMIT_BAL | 10.9% |
+| Demographics | SEX, EDUCATION, MARRIAGE, AGE | 7.4% |
+
+Observations (derived from the table above):
+
+- `PAY_0` is the single most influential feature (27.6% of total importance); the top three features together account for 45.4%.
+- By group, repayment status features carry the most importance (43.7%), followed by payment amounts (22.6%).
+- Higher values of `LIMIT_BAL`, `PAY_AMT2`, `PAY_AMT1`, `PAY_AMT3` push the score towards lower default risk (rank correlation ≤ −0.7).
+- Higher values of `PAY_3`, `PAY_4` push the score towards higher default risk (rank correlation ≥ +0.7).
+- The demographic features (`SEX`, `EDUCATION`, `MARRIAGE`, `AGE`) account for 7.4% of total importance. That is small but not zero, so the protected-characteristic caveat under Limitations applies.
+
+Caveats: SHAP values describe what the model relies on, not causal effects, and were computed on training data, so they say nothing about how well these relationships generalise. The rank correlation is a one-number summary that can hide non-monotone relationships (e.g. `PAY_0` status codes are not ordered quantities); treat the notebook's dot plot as the better guide to direction.
 <!-- RESULTS:END -->
 
 Models can rank differently depending on the operating point: at the

@@ -64,6 +64,80 @@ def render_tuning(tuning: dict) -> list[str]:
     ]
 
 
+FEATURE_GROUPS = [
+    ("Repayment status", "PAY_0, PAY_2–PAY_6"),
+    ("Payment amounts", "PAY_AMT1–6"),
+    ("Bill amounts", "BILL_AMT1–6"),
+    ("Credit limit", "LIMIT_BAL"),
+    ("Demographics", "SEX, EDUCATION, MARRIAGE, AGE"),
+]
+STRONG_DIRECTION = 0.7  # |rank correlation| above which a direction is stated
+MATERIAL_SHARE = 0.10   # demographic share at or above which it is called material, not small
+
+
+def feature_group(feature: str) -> str:
+    if feature.startswith("PAY_AMT"):
+        return "Payment amounts"
+    if feature.startswith("PAY_"):
+        return "Repayment status"
+    if feature.startswith("BILL_AMT"):
+        return "Bill amounts"
+    if feature == "LIMIT_BAL":
+        return "Credit limit"
+    if feature in {"SEX", "EDUCATION", "MARRIAGE", "AGE"}:
+        return "Demographics"
+    return "Other"
+
+
+def group_shares(features: list[dict]) -> dict[str, float]:
+    shares: dict[str, float] = {}
+    for r in features:
+        g = feature_group(r["feature"])
+        shares[g] = shares.get(g, 0.0) + r["share_of_total"]
+    return shares
+
+
+def explainability_observations(expl: dict, top_n: int = 10) -> list[str]:
+    """Plain-language observations derived only from the numbers in the
+    artifact, so they cannot disagree with the table above them."""
+    feats = expl["features"]
+    top = feats[0]
+    top3 = sum(r["share_of_total"] for r in feats[:3])
+    shares = group_shares(feats)
+    ranked_groups = sorted(shares.items(), key=lambda kv: kv[1], reverse=True)
+    obs = [
+        f"`{top['feature']}` is the single most influential feature "
+        f"({top['share_of_total']:.1%} of total importance); the top three features together "
+        f"account for {top3:.1%}.",
+        f"By group, {ranked_groups[0][0].lower()} features carry the most importance "
+        f"({ranked_groups[0][1]:.1%}), followed by {ranked_groups[1][0].lower()} "
+        f"({ranked_groups[1][1]:.1%}).",
+    ]
+    lower = [r["feature"] for r in feats[:top_n]
+             if r["direction_corr"] is not None and r["direction_corr"] <= -STRONG_DIRECTION]
+    higher = [r["feature"] for r in feats[:top_n]
+              if r["direction_corr"] is not None and r["direction_corr"] >= STRONG_DIRECTION]
+    if lower:
+        obs.append(
+            "Higher values of " + ", ".join(f"`{f}`" for f in lower) +
+            f" push the score towards lower default risk (rank correlation ≤ −{STRONG_DIRECTION})."
+        )
+    if higher:
+        obs.append(
+            "Higher values of " + ", ".join(f"`{f}`" for f in higher) +
+            f" push the score towards higher default risk (rank correlation ≥ +{STRONG_DIRECTION})."
+        )
+    demo = shares.get("Demographics")
+    if demo is not None:
+        size = "small but not zero" if demo < MATERIAL_SHARE else "a material share"
+        obs.append(
+            f"The demographic features (`SEX`, `EDUCATION`, `MARRIAGE`, `AGE`) account for "
+            f"{demo:.1%} of total importance. That is {size}, so the protected-"
+            "characteristic caveat under Limitations applies."
+        )
+    return obs
+
+
 def render_explainability(expl: dict, top_n: int = 10) -> list[str]:
     lines = [
         "",
@@ -78,11 +152,29 @@ def render_explainability(expl: dict, top_n: int = 10) -> list[str]:
         lines.append(
             f"| {r['feature']} | {r['mean_abs_shap']:.3f} | {r['share_of_total']:.1%} | {corr} |"
         )
+    shares = group_shares(expl["features"])
     lines += [
         "",
-        "SHAP values describe what the model relies on, not causal effects. "
-        "The rank correlation is a one-number summary and can hide non-monotone "
-        "relationships (e.g. `PAY_0` status codes are not ordered quantities).",
+        "Importance by feature group:",
+        "",
+        "| Group | Features | Share of total importance |",
+        "|---|---|---|",
+    ]
+    for name, members in FEATURE_GROUPS:
+        if name in shares:
+            lines.append(f"| {name} | {members} | {shares[name]:.1%} |")
+    if "Other" in shares:
+        lines.append(f"| Other | — | {shares['Other']:.1%} |")
+
+    lines += ["", "Observations (derived from the table above):", ""]
+    lines += [f"- {o}" for o in explainability_observations(expl, top_n)]
+    lines += [
+        "",
+        "Caveats: SHAP values describe what the model relies on, not causal effects, "
+        "and were computed on training data, so they say nothing about how well these "
+        "relationships generalise. The rank correlation is a one-number summary that can "
+        "hide non-monotone relationships (e.g. `PAY_0` status codes are not ordered "
+        "quantities); treat the notebook's dot plot as the better guide to direction.",
     ]
     return lines
 
