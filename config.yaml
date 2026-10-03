@@ -39,6 +39,11 @@ tuning:
     colsample_bytree: [0.6, 0.8, 1.0]
     reg_lambda: [1, 5, 10]
 
+# SHAP explanation (`python -m credit_default.explain`): rows sampled from the
+# training split. The test set is never used for explanations.
+explain:
+  n_rows: 5000
+
 # Reference model run through the identical code path, so the main
 # model's numbers can be judged against something simpler. Remove this
 # section to skip it.
