@@ -20,7 +20,6 @@ dataset (30,000 clients, Taiwan, 2005; ~22% default rate).
 - [Data](#data)
 - [Project structure](#project-structure)
 - [Limitations](#limitations)
-- [Production considerations](#production-considerations)
 - [License](#license)
 
 ## Overview
@@ -288,8 +287,6 @@ floor changes.
   analysis has been done here.
 - **No cost data.** The precision floor is an assumption, not a derived
   optimum.
-
-
 
 ## License
 
