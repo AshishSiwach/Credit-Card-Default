@@ -19,6 +19,7 @@ dataset (30,000 clients, Taiwan, 2005; ~22% default rate).
 - [Project structure](#project-structure)
 - [Limitations](#limitations)
 - [Production considerations](#production-considerations)
+- [License](#license)
 
 ## Overview
 
@@ -255,3 +256,9 @@ Not implemented here; what a deployment would add:
 - **Retraining:** cadence set from drift monitoring; quarterly is a
   reasonable starting assumption given the macro-sensitivity of
   repayment behaviour.
+
+## License
+
+Code is released under the [MIT License](LICENSE). The dataset is not
+included in this repository; it is subject to its own terms on the
+[UCI repository page](https://archive.ics.uci.edu/dataset/350/default+of+credit+card+clients).
