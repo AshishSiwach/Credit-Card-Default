@@ -1,51 +1,95 @@
-# Credit card default model
+# Credit Card Default Model
 
-A leakage-safe, pipeline-driven model that predicts which credit card
-clients will default next month, built on the UCI "Default of Credit
-Card Clients" dataset (30,000 clients, Taiwan, 2005). The emphasis is on
-validation that matches the data, a metric suited to an imbalanced
-target, and an explicit, defensible decision rule.
+Predicts which credit card clients will default next month, using a
+leakage-safe scikit-learn / XGBoost pipeline and an explicit
+precision-floor decision rule.
 
-## Business problem
+Built on the UCI [Default of Credit Card Clients](https://archive.ics.uci.edu/dataset/350/default+of+credit+card+clients)
+dataset (30,000 clients, Taiwan, 2005; ~22% default rate).
 
-Predict which credit card clients will default next month
-(`default payment next month = 1`) to inform review/intervention
-decisions. Base rate is ~22% default.
+## Contents
 
-## Target & metric
+- [Overview](#overview)
+- [Quick start](#quick-start)
+- [Usage](#usage)
+- [Results](#results)
+- [Method](#method)
+- [The precision-floor assumption](#the-precision-floor-assumption)
+- [Data](#data)
+- [Project structure](#project-structure)
+- [Limitations](#limitations)
+- [Production considerations](#production-considerations)
 
-- Target: `default payment next month` (binary).
-- Model-selection metric: average precision (area under the
-  precision-recall curve) via cross-validation. Accuracy is a poor
-  yardstick on a 78/22 target because it rewards a model that leans
-  toward predicting "no default".
-- Deployment decision rule: maximise recall subject to a precision
-  floor (`min_precision` in config, default 0.45).
+## Overview
 
-### The precision-floor assumption, in plain language
+The goal is to flag clients likely to default so that review or
+intervention can be targeted. Three things shape the design:
 
-The model outputs a risk score; someone has to choose the score above
-which a client is flagged for review. The rule here is: **flag as many
-true defaulters as possible, as long as at least 45% of the clients
-flagged really do default.**
+- **Imbalanced target.** Roughly 78% of clients do not default, so
+  accuracy is misleading. Models are compared on cross-validated
+  *average precision*.
+- **No leakage.** All preprocessing lives inside one scikit-learn
+  `Pipeline`; the train/test split happens in exactly one place and the
+  test set is used once.
+- **Explicit decision rule.** Rather than defaulting to a 0.5 cut-off,
+  the deployed threshold maximises recall subject to a minimum
+  precision, chosen on out-of-fold training predictions.
 
-A precision of 0.45 means roughly 1.2 non-defaulters are reviewed for
-every defaulter caught (`(1 - 0.45) / 0.45`). That is the assumption
-being made: missing a defaulter is costly enough to justify about 1.2
-unnecessary reviews to catch one. If a wasted review costs `X` and a
-missed default costs `Y`, flagging pays off only while precision is at
-least `X / (X + Y)` — so the floor is really a statement about that
-cost ratio. **No real cost figures were available, so 0.45 is an
-illustrative choice, not a derived one.** The assumption is what to
-challenge and revisit with real business input; the sensitivity table
-below shows what moving the floor does to recall and review workload.
+## Quick start
+
+Requires Python 3.10+.
+
+```bash
+git clone https://github.com/AshishSiwach/Credit-Card-Default.git
+cd Credit-Card-Default
+python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
+pip install -e ".[dev]"
+```
+
+Download the dataset from the UCI link above and place it at
+`data/raw/default of credit card clients.xls` (the `data/` folder is
+gitignored). Then:
+
+```bash
+python -m credit_default.train --config config.yaml
+pytest tests/
+```
+
+## Usage
+
+| Command | Purpose | Output (in `artifacts/`) |
+|---|---|---|
+| `python -m credit_default.train --config config.yaml` | Cross-validate, tune the threshold, fit, evaluate once on the test set | `model.joblib`, `metrics.json` |
+| `python -m credit_default.compare --config config.yaml` | Rank candidate models at the default and precision-floor thresholds | `comparison.json` |
+| `python -m credit_default.sensitivity --config config.yaml` | Re-run the main model at several precision floors | `sensitivity.json` |
+| `python -m credit_default.report` | Refresh the [Results](#results) block below from the artifacts | — |
+| `python -m credit_default.report --check` | Fail if the Results block is stale | — |
+
+All parameters (data path, model and hyperparameters, CV folds, scoring
+metric, precision floor, comparison candidates) live in
+[`config.yaml`](config.yaml). The EDA notebook in `notebooks/` needs
+`pip install -e ".[notebook]"` and the artifacts above.
+
+Using the trained model:
+
+```python
+import joblib, json
+from credit_default.data import load_raw, split
+
+pipe = joblib.load("artifacts/model.joblib")
+threshold = json.load(open("artifacts/metrics.json"))["chosen_threshold"]
+
+df = load_raw("data/raw/default of credit card clients.xls")
+_, X_test, _, _ = split(df)           # same split as training (config defaults)
+flagged = pipe.predict_proba(X_test)[:, 1] >= threshold
+```
 
 ## Results
 
-Numbers below are generated from `artifacts/*.json` by
-`python -m credit_default.report` (a test fails if they drift). One run,
-one random split, seed 42 — differences of a point or two between
-models are within noise (see Limitations).
+Generated from `artifacts/*.json` by `python -m credit_default.report`;
+a test fails if this block drifts from the artifacts. One run, one
+random split, seed 42 — differences of a point or two between models are
+within noise (see [Limitations](#limitations)).
 
 <!-- RESULTS:START (generated by `python -m credit_default.report` - do not edit) -->
 **Main model: xgboost** — 24,000 train / 6,000 test rows, default rate 22.1% in test. Precision floor: 0.45.
@@ -78,119 +122,136 @@ models are within noise (see Limitations).
 | 0.55 | 0.536 | 0.529 | 21.8% | 0.87 |
 <!-- RESULTS:END -->
 
-Reading the comparison: models can rank differently depending on the
-operating point. At the default 0.5 threshold some candidates trade
-precision for recall very differently; at the common precision-floor
-threshold they are judged on the same business rule, which is why the
-deployment decision is made there rather than at 0.5.
+Models can rank differently depending on the operating point: at the
+default 0.5 threshold some candidates trade precision for recall very
+differently, while at the common precision-floor threshold they are
+judged on the same business rule. The deployment decision is therefore
+made at the floor, not at 0.5.
 
-## Design decisions
+## Method
 
-- **One split, one place.** `data.py` owns the stratified train/test
-  split. The test set is used once, for the final evaluation, and never
-  to choose a model, tune, or pick a threshold.
-- **Everything learned from data lives inside one `Pipeline`.** The
-  scaler and encoder are fit on training data only (and refit per
-  cross-validation fold). A test scans `src/` to ensure no
-  `fit_transform` call exists and no `.fit()` happens outside the final
-  pipeline fit on training data.
-- **Categorical codes are one-hot encoded.** `SEX`, `EDUCATION` and
-  `MARRIAGE` are nominal codes; feeding them as integers would imply a
-  false ordering.
-- **Imbalance via class weighting, not resampling.** `scale_pos_weight`
-  (XGBoost, derived from the training labels) or `class_weight` (sklearn
-  models) keeps one imbalance technique in play.
-- **Model selection on cross-validated average precision**, computed on
-  the training split only.
-- **Threshold chosen on out-of-fold predictions** of training data; if
-  the floor cannot be met the code raises rather than falling back to a
-  default threshold.
-- **One evaluation code path.** The main model, baseline and comparison
-  candidates all run through `train.run_model`.
-- **Config-driven.** Paths, hyperparameters, CV settings and the
-  precision floor live in `config.yaml`.
+1. **Load and validate** (`data.py`). Schema, missing values, binary
+   target, category codes and ID uniqueness are checked; problems raise
+   an error instead of being repaired silently.
+2. **Split once** (`data.py`). A stratified train/test split in a single
+   function; the test set is never used for model choice, tuning or
+   threshold selection.
+3. **Preprocess inside the pipeline** (`features.py`, `pipeline.py`).
+   Numeric features are standardised; `SEX`, `EDUCATION` and `MARRIAGE`
+   are one-hot encoded because they are nominal codes, not ordered
+   quantities. Everything is fit on training data only and refit per CV
+   fold.
+4. **Handle imbalance by class weighting**, not resampling:
+   `scale_pos_weight` (XGBoost, derived from training labels) or
+   `class_weight` (scikit-learn models).
+5. **Select on cross-validated average precision**, computed on the
+   training split only.
+6. **Choose the threshold** (`evaluate.py`). From out-of-fold training
+   predictions, pick the threshold with the highest recall whose
+   precision is at least the configured floor. If no threshold meets the
+   floor, the code raises rather than falling back to a default.
+7. **Evaluate once** on the held-out test set and persist the model and
+   metrics.
 
-## Data notes
+Every model — main, baseline and comparison candidates — runs through a
+single function, `train.run_model`, so metrics cannot be reported under
+the wrong model's name. A test scans `src/` to enforce that no
+`fit_transform` call exists, `train_test_split` appears only in
+`data.py`, and the only `.fit()` is the final pipeline fit on training
+data.
 
-- The UCI `.xls` has a label row (`X1..X23, Y`) above the real header
-  and an `ID` column; the loader handles the former and drops the
-  latter (an identifier, not a feature). `load_raw` validates columns,
-  missing values, a binary target, category codes and unique IDs, and
-  fails loudly rather than repairing anything.
-- Undocumented category codes are present in the real data
-  (`EDUCATION` 0/5/6 — 345 of 30,000 rows; `MARRIAGE` 0 — 54 rows).
-  They are kept as their own one-hot categories rather than recoded, so
-  the data quirk stays visible; the validator rejects any code outside
-  the observed set.
+## The precision-floor assumption
+
+The model outputs a risk score; someone has to choose the score above
+which a client is flagged for review. The rule is: **flag as many true
+defaulters as possible, as long as at least 45% of the clients flagged
+really do default** (`min_precision` in `config.yaml`).
+
+A precision of 0.45 means roughly 1.2 non-defaulters are reviewed for
+every defaulter caught (`(1 − 0.45) / 0.45`). If a wasted review costs
+`X` and a missed default costs `Y`, flagging pays off only while
+precision is at least `X / (X + Y)`, so the floor is really a statement
+about that cost ratio. **No real cost data was available, so 0.45 is an
+illustrative choice, not a derived one.** That assumption is the thing
+to challenge and revisit with real business input; the sensitivity table
+in [Results](#results) shows how recall and review workload move as the
+floor changes.
+
+## Data
+
+- **Source:** UCI Machine Learning Repository, "Default of Credit Card
+  Clients" (30,000 rows, 23 features plus the target).
+- **Features:** credit limit (`LIMIT_BAL`), demographics (`SEX`,
+  `EDUCATION`, `MARRIAGE`, `AGE`), six months of repayment status
+  (`PAY_0`, `PAY_2`–`PAY_6`), bill amounts (`BILL_AMT1`–`6`) and payment
+  amounts (`PAY_AMT1`–`6`).
+- **Target:** `default payment next month` (1 = default).
+- **File quirks handled by the loader:** the `.xls` has a label row
+  (`X1..X23, Y`) above the real header and an `ID` column, which is
+  dropped (identifier, not a feature).
+- **Undocumented category codes** appear in the real data (`EDUCATION`
+  0/5/6 — 345 rows; `MARRIAGE` 0 — 54 rows). They are kept as their own
+  one-hot categories rather than recoded, and the validator rejects any
+  code outside the observed set.
+
+## Project structure
+
+```
+.
+├── config.yaml              run parameters: paths, models, CV, precision floor
+├── pyproject.toml           package metadata and extras (dev, notebook)
+├── src/credit_default/
+│   ├── data.py              loading, validation, the single train/test split
+│   ├── features.py          preprocessing (ColumnTransformer)
+│   ├── pipeline.py          preprocessing + classifier as one Pipeline
+│   ├── train.py             training CLI and the shared run_model path
+│   ├── evaluate.py          threshold selection and test metrics
+│   ├── compare.py           candidate-model comparison CLI
+│   ├── sensitivity.py       precision-floor sensitivity CLI
+│   └── report.py            regenerates the Results block
+├── tests/                   pytest suite
+├── notebooks/               EDA and model-comparison narrative
+├── data/raw/                dataset (gitignored)
+└── artifacts/               generated model and metrics (gitignored)
+```
 
 ## Limitations
 
 - **The floor holds on training data, not guaranteed on new data.** It
   is enforced on out-of-fold training predictions. On the held-out test
   set realised precision lands close to, and sometimes a little under,
-  the floor (see the tables above). With ~6,000 test rows and ~1,900
-  flagged clients, test precision has a standard error of about one
-  percentage point.
-- **One split, one seed.** No repeated CV or confidence intervals on
-  the comparison; small gaps between models should not be over-read.
+  the floor. With ~6,000 test rows and ~1,900 flagged clients, test
+  precision has a standard error of about one percentage point.
+- **One split, one seed.** There is no repeated CV or confidence
+  interval on the comparison; small gaps between models should not be
+  over-read.
 - **Hyperparameters are untuned.** Values in `config.yaml` were set by
-  hand; cross-validation is used to estimate and compare models, not to
-  tune them. Tuning (scored on average precision, inside the training
-  data) is not implemented.
-- **Scores are not calibrated probabilities.** Class weighting
-  (`scale_pos_weight`) shifts the scores, so the chosen threshold is a
-  cut-off on the model's score, not a "47% chance of default". Calibration
-  has not been checked.
+  hand; cross-validation estimates and compares models but does not tune
+  them.
+- **Scores are not calibrated probabilities.** Class weighting shifts
+  the scores, so the chosen threshold is a cut-off on the model's score,
+  not a "47% chance of default". Calibration has not been checked.
 - **Random split, not temporal.** The data is a single 2005 Taiwan
-  snapshot; there is no out-of-time validation and no evidence the
-  model transfers to another population or period.
-- **Protected-characteristic features.** `SEX`, `AGE` and `MARRIAGE`
-  are model inputs. In a real UK credit-decisioning setting their use
-  would need legal and fairness review (Equality Act, FCA expectations);
-  no fairness analysis has been done here.
-- **No cost data.** The precision floor is an assumption (see above),
-  not a derived optimum.
+  snapshot; there is no out-of-time validation and no evidence the model
+  transfers to another population or period.
+- **Protected-characteristic features.** `SEX`, `AGE` and `MARRIAGE` are
+  model inputs. In a UK credit-decisioning setting their use would need
+  legal and fairness review (Equality Act, FCA expectations); no fairness
+  analysis has been done here.
+- **No cost data.** The precision floor is an assumption, not a derived
+  optimum.
 
-## Project structure
+## Production considerations
 
-```
-src/credit_default/   data, features, pipeline, train, evaluate, compare, sensitivity, report
-tests/                pytest suite (leakage guards, encoding, threshold, CLI, reproducibility)
-notebooks/            EDA and model-comparison narrative (never the source of the shipped model)
-config.yaml           run parameters: data path, model, CV scoring, precision floor
-```
+Not implemented here; what a deployment would add:
 
-## Running
-
-Python 3.10+. Put the UCI file at
-`data/raw/default of credit card clients.xls` (gitignored).
-
-```bash
-pip install -e ".[dev]"
-python -m credit_default.train --config config.yaml
-python -m credit_default.compare --config config.yaml       # model comparison
-python -m credit_default.sensitivity --config config.yaml   # precision-floor sensitivity
-python -m credit_default.report                             # refresh the Results block above
-pytest tests/
-```
-
-The notebook needs `pip install -e ".[notebook]"` and the artifacts
-from the commands above.
-
-Outputs (all in `artifacts/`, gitignored): `model.joblib`,
-`metrics.json`, `comparison.json`, `sensitivity.json`.
-
-## If this went to production
-
-- **Monitoring:** population stability index on `LIMIT_BAL`,
-  `BILL_AMT*`, `PAY_AMT*` (credit-behaviour features drift with macro
-  conditions), prediction-score distribution drift, realised default
-  rate vs. predicted over each monitoring window.
-- **A/B test design:** randomise flagged accounts into model-driven
-  review vs. the existing decisioning process; primary metric is
-  realised default rate and write-off value in each arm over a fixed
-  window; secondary metric is review-team workload / cost per
-  prevented default.
-- **Retraining cadence:** not fixed — would be set from real drift
-  monitoring data, but quarterly is a reasonable starting assumption
-  given macro-sensitivity of repayment behaviour.
+- **Monitoring:** population stability index on `LIMIT_BAL`, `BILL_AMT*`
+  and `PAY_AMT*`; score-distribution drift; realised default rate versus
+  predicted over each monitoring window.
+- **Evaluation:** randomise flagged accounts into model-driven review
+  versus the existing process; primary metrics are realised default rate
+  and write-off value over a fixed window, secondary is review workload
+  and cost per prevented default.
+- **Retraining:** cadence set from drift monitoring; quarterly is a
+  reasonable starting assumption given the macro-sensitivity of
+  repayment behaviour.
