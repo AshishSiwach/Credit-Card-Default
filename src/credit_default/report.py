@@ -14,6 +14,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -138,11 +139,21 @@ def explainability_observations(expl: dict, top_n: int = 10) -> list[str]:
     return obs
 
 
+def _figure(expl: dict, index: int) -> list[str]:
+    figures = expl.get("figures", [])
+    if index >= len(figures):
+        return []
+    return ["", f"![{figures[index]['alt']}]({figures[index]['path']})"]
+
+
 def render_explainability(expl: dict, top_n: int = 10) -> list[str]:
     lines = [
         "",
         f"**Feature importance (SHAP)** — {expl['method']}, on a {expl['n_rows']:,}-row "
         f"sample of the training split; top {top_n} of {len(expl['features'])} features:",
+    ]
+    lines += _figure(expl, 0)  # importance bars, coloured by the groups tabulated below
+    lines += [
         "",
         "| Feature | Mean \\|SHAP\\| | Share of total | Rank corr. (value vs SHAP) |",
         "|---|---|---|---|",
@@ -166,7 +177,8 @@ def render_explainability(expl: dict, top_n: int = 10) -> list[str]:
     if "Other" in shares:
         lines.append(f"| Other | — | {shares['Other']:.1%} |")
 
-    lines += ["", "Observations (derived from the table above):", ""]
+    lines += _figure(expl, 1)  # per-client dot plot: direction of each feature's effect
+    lines += ["", "Observations (derived from the tables above):", ""]
     lines += [f"- {o}" for o in explainability_observations(expl, top_n)]
     lines += [
         "",
@@ -262,16 +274,33 @@ def replace_block(readme: str, block: str) -> str:
     return f"{head}{START}\n{block}\n{END}{tail}"
 
 
+def verify_figures(expl: dict | None, readme_dir: Path) -> None:
+    """Every figure the artifact lists must exist next to the README and be
+    byte-identical to what `explain` wrote, so an image cannot sit under
+    numbers it was not generated from."""
+    for fig in (expl or {}).get("figures", []):
+        path = readme_dir / fig["path"]
+        if not path.exists():
+            raise FileNotFoundError(f"{path} not found; run `python -m credit_default.explain`")
+        if hashlib.sha256(path.read_bytes()).hexdigest() != fig["sha256"]:
+            raise ValueError(
+                f"{path} does not match explainability.json (stale or edited); "
+                "re-run `python -m credit_default.explain`"
+            )
+
+
 def build(readme_path: Path, artifacts: Path) -> str:
     metrics = _load(artifacts, "metrics.json")
     if metrics is None:
         raise FileNotFoundError(f"{artifacts / 'metrics.json'} not found; run training first")
+    explainability = _load(artifacts, "explainability.json")
+    verify_figures(explainability, readme_path.parent)
     block = render_results(
         metrics,
         _load(artifacts, "comparison.json"),
         _load(artifacts, "sensitivity.json"),
         _load(artifacts, "tuning.json"),
-        _load(artifacts, "explainability.json"),
+        explainability,
     )
     return replace_block(readme_path.read_text(encoding="utf-8"), block)
 

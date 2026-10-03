@@ -43,6 +43,9 @@ tuning:
 # training split. The test set is never used for explanations.
 explain:
   n_rows: 5000
+  # PNGs for the README; tracked in git (artifacts/ is not). Needs the
+  # `notebook` extra for matplotlib. Remove the key to skip figures.
+  figures_dir: docs/images
 
 # Reference model run through the identical code path, so the main
 # model's numbers can be judged against something simpler. Remove this

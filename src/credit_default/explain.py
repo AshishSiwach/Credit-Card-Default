@@ -132,6 +132,13 @@ def main(config_path: str) -> dict:
         "max_additivity_error": max_error,
         "features": summarise(shap_df, sample),
     }
+    if settings.get("figures_dir"):
+        # Imported here so the numeric report works without matplotlib.
+        from credit_default.plots import save_figures
+
+        report["figures"] = save_figures(
+            shap_df, sample, report["features"], Path(settings["figures_dir"])
+        )
 
     out_dir = Path(cfg["output_dir"])
     with open(out_dir / "explainability.json", "w") as f:

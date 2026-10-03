@@ -65,7 +65,7 @@ pytest tests/
 | `python -m credit_default.compare --config config.yaml` | Rank candidate models at the default and precision-floor thresholds | `comparison.json` |
 | `python -m credit_default.sensitivity --config config.yaml` | Re-run the main model at several precision floors | `sensitivity.json` |
 | `python -m credit_default.tune --config config.yaml` | Random hyperparameter search scored on CV average precision (training split only); reports, never edits config | `tuning.json` |
-| `python -m credit_default.explain --config config.yaml` | SHAP feature importance of the trained model (training-split sample) | `explainability.json` |
+| `python -m credit_default.explain --config config.yaml` | SHAP feature importance of the trained model (training-split sample); also draws the figures in [Results](#results) (needs `.[notebook]`) | `explainability.json`, plus PNGs in `docs/images/` |
 | `python -m credit_default.report` | Refresh the [Results](#results) block below from the artifacts | — |
 | `python -m credit_default.report --check` | Fail if the Results block is stale | — |
 
@@ -136,6 +136,8 @@ Gain: +0.0028 (+0.44 current-CV standard deviations). The gain is within CV nois
 
 **Feature importance (SHAP)** — TreeSHAP via XGBoost pred_contribs (log-odds units), on a 5,000-row sample of the training split; top 10 of 23 features:
 
+![Bar chart of mean absolute SHAP value for the top features, coloured by feature group](docs/images/shap_importance.png)
+
 | Feature | Mean \|SHAP\| | Share of total | Rank corr. (value vs SHAP) |
 |---|---|---|---|
 | PAY_0 | 0.538 | 27.6% | +0.32 |
@@ -159,7 +161,9 @@ Importance by feature group:
 | Credit limit | LIMIT_BAL | 10.9% |
 | Demographics | SEX, EDUCATION, MARRIAGE, AGE | 7.4% |
 
-Observations (derived from the table above):
+![Dot plot of per-client SHAP values for the top numeric features, coloured by feature value](docs/images/shap_summary.png)
+
+Observations (derived from the tables above):
 
 - `PAY_0` is the single most influential feature (27.6% of total importance); the top three features together account for 45.4%.
 - By group, repayment status features carry the most importance (43.7%), followed by payment amounts (22.6%).
@@ -268,8 +272,10 @@ floor changes.
 │   ├── sensitivity.py       precision-floor sensitivity CLI
 │   ├── tune.py              hyperparameter search CLI
 │   ├── explain.py           SHAP feature importance CLI
+│   ├── plots.py             SHAP figures (matplotlib, optional extra)
 │   └── report.py            regenerates the Results block
 ├── tests/                   pytest suite
+├── docs/images/             SHAP figures embedded in this README (tracked in git)
 ├── notebooks/               EDA and model-comparison narrative
 ├── data/raw/                dataset (gitignored)
 └── artifacts/               generated model and metrics (gitignored)

@@ -145,7 +145,7 @@ def test_rendered_explainability_includes_group_table_and_observations():
     text = render_results(METRICS, None, None, explainability=EXPL_RICH)
     assert "| Repayment status | PAY_0, PAY_2–PAY_6 | 50.0% |" in text
     assert "| Demographics | SEX, EDUCATION, MARRIAGE, AGE | 10.0% |" in text
-    assert "Observations (derived from the table above):" in text
+    assert "Observations (derived from the tables above):" in text
     assert "not causal" in text
 
 
