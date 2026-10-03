@@ -25,6 +25,20 @@ model:
     learning_rate: 0.05
     eval_metric: logloss
 
+# Search for `python -m credit_default.tune` (training split only, scored on
+# cv_scoring). A list is a discrete set; {loguniform: [lo, hi]} a log range.
+# The search only reports; chosen values are copied into model.params by hand.
+tuning:
+  n_iter: 60
+  search_space:
+    n_estimators: [100, 200, 300, 400, 600]
+    max_depth: [2, 3, 4, 5, 6]
+    learning_rate: {loguniform: [0.01, 0.2]}
+    min_child_weight: [1, 3, 5, 10]
+    subsample: [0.7, 0.85, 1.0]
+    colsample_bytree: [0.6, 0.8, 1.0]
+    reg_lambda: [1, 5, 10]
+
 # Reference model run through the identical code path, so the main
 # model's numbers can be judged against something simpler. Remove this
 # section to skip it.

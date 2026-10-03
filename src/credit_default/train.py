@@ -61,6 +61,10 @@ def validate_config(cfg: dict) -> None:
     missing = [k for k in REQUIRED_TOP_LEVEL_KEYS if k not in cfg]
     if missing:
         raise ValueError(f"Config is missing required keys: {missing}")
+    if "tuning" in cfg:
+        tuning = cfg["tuning"]
+        if not isinstance(tuning.get("n_iter"), int) or not tuning.get("search_space"):
+            raise ValueError("Config section 'tuning' needs integer 'n_iter' and a 'search_space'")
     sections = {name: cfg[name] for name in ("model", "baseline") if name in cfg}
     for i, entry in enumerate(cfg.get("comparison", [])):
         if "name" not in entry:

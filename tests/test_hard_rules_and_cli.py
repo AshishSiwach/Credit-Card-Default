@@ -43,10 +43,11 @@ def test_train_test_split_is_only_called_in_data_py():
     assert offenders == []
 
 
-def test_only_fit_call_is_the_final_pipeline_fit_on_training_data():
-    """`.fit(...)` may appear exactly once in src/: train.py fitting the
-    Pipeline on X_train. If this fails, someone is fitting something by
-    hand — extend the pipeline instead."""
+def test_only_fit_calls_are_on_training_data():
+    """`.fit(...)` may appear exactly twice in src/, always on training
+    data: train.py fitting the final Pipeline, and tune.py running a
+    cross-validated search over that Pipeline. If this fails, someone is
+    fitting something by hand — extend the pipeline instead."""
     fits = []
     for fname, node in _calls():
         if _callee_name(node) != "fit":
@@ -54,7 +55,7 @@ def test_only_fit_call_is_the_final_pipeline_fit_on_training_data():
         receiver = getattr(node.func.value, "id", "?")
         first_arg = getattr(node.args[0], "id", "?") if node.args else "?"
         fits.append((fname, receiver, first_arg))
-    assert fits == [("train.py", "pipe", "X_train")]
+    assert sorted(fits) == [("train.py", "pipe", "X_train"), ("tune.py", "search", "X_train")]
 
 
 @pytest.fixture
