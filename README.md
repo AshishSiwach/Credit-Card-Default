@@ -1,5 +1,7 @@
 # Credit Card Default Model
 
+[![CI](https://github.com/AshishSiwach/Credit-Card-Default/actions/workflows/ci.yml/badge.svg)](https://github.com/AshishSiwach/Credit-Card-Default/actions/workflows/ci.yml)
+
 Predicts which credit card clients will default next month, using a
 leakage-safe scikit-learn / XGBoost pipeline and an explicit
 precision-floor decision rule.
@@ -63,6 +65,8 @@ pytest tests/
 | `python -m credit_default.train --config config.yaml` | Cross-validate, tune the threshold, fit, evaluate once on the test set | `model.joblib`, `metrics.json` |
 | `python -m credit_default.compare --config config.yaml` | Rank candidate models at the default and precision-floor thresholds | `comparison.json` |
 | `python -m credit_default.sensitivity --config config.yaml` | Re-run the main model at several precision floors | `sensitivity.json` |
+| `python -m credit_default.tune --config config.yaml` | Random hyperparameter search scored on CV average precision (training split only); reports, never edits config | `tuning.json` |
+| `python -m credit_default.explain --config config.yaml` | SHAP feature importance of the trained model (training-split sample) | `explainability.json` |
 | `python -m credit_default.report` | Refresh the [Results](#results) block below from the artifacts | — |
 | `python -m credit_default.report --check` | Fail if the Results block is stale | — |
 
@@ -121,6 +125,32 @@ within noise (see [Limitations](#limitations)).
 | 0.35 | 0.346 | 0.797 | 50.9% | 1.89 |
 | 0.45 | 0.452 | 0.641 | 31.4% | 1.21 |
 | 0.55 | 0.536 | 0.529 | 21.8% | 0.87 |
+
+**Hyperparameter search** (random search, 60 candidates, 5-fold CV on the training split, scored on average_precision):
+
+| | CV score | Parameters |
+|---|---|---|
+| Current configuration | 0.5603 ± 0.0065 | n_estimators=200, max_depth=4, learning_rate=0.05 |
+| Best of search | 0.5631 ± 0.0074 | colsample_bytree=1, learning_rate=0.013, max_depth=5, min_child_weight=1, n_estimators=600, reg_lambda=1, subsample=0.85 |
+
+Gain: +0.0028 (+0.44 current-CV standard deviations). The gain is within CV noise (under one standard deviation), so the configured parameters were kept. The best-of-search score is selected as a maximum over noisy estimates and is optimistically biased.
+
+**Feature importance (SHAP)** — TreeSHAP via XGBoost pred_contribs (log-odds units), on a 5,000-row sample of the training split; top 10 of 23 features:
+
+| Feature | Mean \|SHAP\| | Share of total | Rank corr. (value vs SHAP) |
+|---|---|---|---|
+| PAY_0 | 0.538 | 27.6% | +0.32 |
+| LIMIT_BAL | 0.212 | 10.9% | -0.95 |
+| BILL_AMT1 | 0.135 | 6.9% | -0.28 |
+| PAY_AMT2 | 0.117 | 6.0% | -0.91 |
+| PAY_AMT1 | 0.094 | 4.8% | -0.96 |
+| PAY_AMT3 | 0.093 | 4.8% | -0.81 |
+| PAY_2 | 0.083 | 4.3% | +0.47 |
+| PAY_3 | 0.077 | 3.9% | +0.86 |
+| PAY_4 | 0.054 | 2.8% | +0.71 |
+| PAY_6 | 0.053 | 2.7% | +0.29 |
+
+SHAP values describe what the model relies on, not causal effects. The rank correlation is a one-number summary and can hide non-monotone relationships (e.g. `PAY_0` status codes are not ordered quantities).
 <!-- RESULTS:END -->
 
 Models can rank differently depending on the operating point: at the
@@ -153,13 +183,22 @@ made at the floor, not at 0.5.
    floor, the code raises rather than falling back to a default.
 7. **Evaluate once** on the held-out test set and persist the model and
    metrics.
+8. **Tune separately and explicitly** (`tune.py`). A random search over
+   the XGBoost parameters runs on the training split with the same CV
+   folds as the configured model, so the two are compared like for like.
+   It only reports; any change to `config.yaml` is a deliberate, reviewable
+   edit. The test set is never involved, so the test numbers stay
+   unbiased.
+9. **Explain** (`explain.py`). Exact TreeSHAP values from XGBoost's
+   native `pred_contribs`, computed on a training-split sample, with
+   one-hot columns summed back to their source feature.
 
 Every model — main, baseline and comparison candidates — runs through a
 single function, `train.run_model`, so metrics cannot be reported under
 the wrong model's name. A test scans `src/` to enforce that no
 `fit_transform` call exists, `train_test_split` appears only in
-`data.py`, and the only `.fit()` is the final pipeline fit on training
-data.
+`data.py`, and the only `.fit()` calls are the final pipeline fit and the
+cross-validated search over that pipeline, both on training data.
 
 ## The precision-floor assumption
 
@@ -199,8 +238,9 @@ floor changes.
 
 ```
 .
-├── config.yaml              run parameters: paths, models, CV, precision floor
+├── config.yaml              run parameters: paths, models, CV, precision floor, search space
 ├── pyproject.toml           package metadata and extras (dev, notebook)
+├── .github/workflows/       CI: pytest on Python 3.10 and 3.12
 ├── src/credit_default/
 │   ├── data.py              loading, validation, the single train/test split
 │   ├── features.py          preprocessing (ColumnTransformer)
@@ -209,6 +249,8 @@ floor changes.
 │   ├── evaluate.py          threshold selection and test metrics
 │   ├── compare.py           candidate-model comparison CLI
 │   ├── sensitivity.py       precision-floor sensitivity CLI
+│   ├── tune.py              hyperparameter search CLI
+│   ├── explain.py           SHAP feature importance CLI
 │   └── report.py            regenerates the Results block
 ├── tests/                   pytest suite
 ├── notebooks/               EDA and model-comparison narrative
@@ -226,9 +268,14 @@ floor changes.
 - **One split, one seed.** There is no repeated CV or confidence
   interval on the comparison; small gaps between models should not be
   over-read.
-- **Hyperparameters are untuned.** Values in `config.yaml` were set by
-  hand; cross-validation estimates and compares models but does not tune
-  them.
+- **Tuning was a modest random search.** One search of 60 candidates
+  over a bounded XGBoost space found no gain beyond CV noise (see
+  Results), so the hand-set values were kept. A wider search, other
+  model families, or tuning the class weighting might do better; none
+  was tried.
+- **SHAP describes the model, not the world.** Importances show what the
+  model relies on, not causal effects, and are computed on a training
+  sample.
 - **Scores are not calibrated probabilities.** Class weighting shifts
   the scores, so the chosen threshold is a cut-off on the model's score,
   not a "47% chance of default". Calibration has not been checked.

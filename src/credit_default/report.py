@@ -2,7 +2,8 @@
 
 The README's numbers are never typed by hand: this module regenerates
 the block between the RESULTS markers from `metrics.json`,
-`comparison.json` and `sensitivity.json`. `--check` exits non-zero if
+`comparison.json`, `sensitivity.json`, `tuning.json` and
+`explainability.json` (the last three optional). `--check` exits non-zero if
 the README is out of date, which is what keeps README and artifacts in
 step (CLAUDE.md "Definition of done").
 
@@ -26,7 +27,73 @@ def _load(artifacts: Path, name: str) -> dict | None:
     return json.loads(path.read_text()) if path.exists() else None
 
 
-def render_results(metrics: dict, comparison: dict | None, sensitivity: dict | None) -> str:
+def render_tuning(tuning: dict) -> list[str]:
+    scoring = tuning["scoring"]
+    cur_mean = tuning[f"current_cv_mean_{scoring}"]
+    cur_std = tuning[f"current_cv_std_{scoring}"]
+    best = tuning["best"]
+    stds = tuning["gain_in_current_cv_stds"]
+    if stds is not None and stds >= 1.0:
+        verdict = "The gain exceeds one CV standard deviation; adopting the searched values is worth considering."
+    else:
+        verdict = (
+            "The gain is within CV noise (under one standard deviation), so the "
+            "configured parameters were kept."
+        )
+    return [
+        "",
+        f"**Hyperparameter search** (random search, {tuning['n_iter']} candidates, "
+        f"{tuning['cv_folds']}-fold CV on the training split, scored on {scoring}):",
+        "",
+        "| | CV score | Parameters |",
+        "|---|---|---|",
+        f"| Current configuration | {cur_mean:.4f} ± {cur_std:.4f} | "
+        + ", ".join(f"{k}={v}" for k, v in tuning["current_params"].items() if k != "eval_metric")
+        + " |",
+        f"| Best of search | {best[f'cv_mean_{scoring}']:.4f} ± {best[f'cv_std_{scoring}']:.4f} | "
+        + ", ".join(
+            f"{k}={v:.3g}" if isinstance(v, float) else f"{k}={v}" for k, v in best["params"].items()
+        )
+        + " |",
+        "",
+        f"Gain: {tuning['gain_over_current']:+.4f} "
+        + (f"({stds:+.2f} current-CV standard deviations). " if stds is not None else ". ")
+        + verdict
+        + " The best-of-search score is selected as a maximum over noisy estimates and is "
+        "optimistically biased.",
+    ]
+
+
+def render_explainability(expl: dict, top_n: int = 10) -> list[str]:
+    lines = [
+        "",
+        f"**Feature importance (SHAP)** — {expl['method']}, on a {expl['n_rows']:,}-row "
+        f"sample of the training split; top {top_n} of {len(expl['features'])} features:",
+        "",
+        "| Feature | Mean \\|SHAP\\| | Share of total | Rank corr. (value vs SHAP) |",
+        "|---|---|---|---|",
+    ]
+    for r in expl["features"][:top_n]:
+        corr = f"{r['direction_corr']:+.2f}" if r["direction_corr"] is not None else "n/a (categorical)"
+        lines.append(
+            f"| {r['feature']} | {r['mean_abs_shap']:.3f} | {r['share_of_total']:.1%} | {corr} |"
+        )
+    lines += [
+        "",
+        "SHAP values describe what the model relies on, not causal effects. "
+        "The rank correlation is a one-number summary and can hide non-monotone "
+        "relationships (e.g. `PAY_0` status codes are not ordered quantities).",
+    ]
+    return lines
+
+
+def render_results(
+    metrics: dict,
+    comparison: dict | None,
+    sensitivity: dict | None,
+    tuning: dict | None = None,
+    explainability: dict | None = None,
+) -> str:
     cm = metrics["confusion_matrix"]
     ds = metrics["dataset"]
     lines = [
@@ -87,6 +154,11 @@ def render_results(metrics: dict, comparison: dict | None, sensitivity: dict | N
                 f"| {r['flagged_share_of_test']:.1%} | "
                 f"{r['false_positives_per_true_positive']:.2f} |"
             )
+
+    if tuning:
+        lines += render_tuning(tuning)
+    if explainability:
+        lines += render_explainability(explainability)
     return "\n".join(lines)
 
 
@@ -103,7 +175,11 @@ def build(readme_path: Path, artifacts: Path) -> str:
     if metrics is None:
         raise FileNotFoundError(f"{artifacts / 'metrics.json'} not found; run training first")
     block = render_results(
-        metrics, _load(artifacts, "comparison.json"), _load(artifacts, "sensitivity.json")
+        metrics,
+        _load(artifacts, "comparison.json"),
+        _load(artifacts, "sensitivity.json"),
+        _load(artifacts, "tuning.json"),
+        _load(artifacts, "explainability.json"),
     )
     return replace_block(readme_path.read_text(encoding="utf-8"), block)
 

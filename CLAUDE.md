@@ -41,10 +41,13 @@ never typed by hand.
 **Hard rule:** no module outside `data.py` may call `train_test_split`,
 and no code outside the `Pipeline` object may call `.fit()` or
 `.fit_transform()` on anything — in particular, never call
-`fit_transform` on `X_test`. If you're tempted to scale data by hand in
-a script, that's the signal the pipeline abstraction is being
-bypassed — extend the pipeline instead. `tests/test_hard_rules_and_cli.py`
-enforces this by scanning `src/`.
+`fit_transform` on `X_test`. The only permitted `.fit()` calls are the
+final pipeline fit in `train.py` and the cross-validated search over
+that pipeline in `tune.py`, both on `X_train`. If you're tempted to
+scale data by hand in a script, that's the signal the pipeline
+abstraction is being bypassed — extend the pipeline instead.
+`tests/test_hard_rules_and_cli.py` enforces this by scanning `src/`;
+widening it is a deliberate decision, never a quick fix.
 
 ## Layout
 
@@ -65,9 +68,12 @@ credit-card-default-model/
 │   ├── evaluate.py            recall-at-precision-floor threshold tuning + metrics
 │   ├── compare.py             CLI: candidate models ranked by CV average precision
 │   ├── sensitivity.py         CLI: main model at several precision floors
+│   ├── tune.py                CLI: random hyperparameter search (reports only; never edits config)
+│   ├── explain.py             CLI: SHAP feature importance via XGBoost TreeSHAP
 │   └── report.py              regenerates the README results block from artifacts
+├── .github/workflows/ci.yml   CI: pytest on Python 3.10 and 3.12
 ├── tests/                     pytest suite (see "Definition of done")
-└── artifacts/                 model.joblib, metrics.json, comparison.json, sensitivity.json (generated, gitignored)
+└── artifacts/                 model.joblib, metrics.json, comparison.json, sensitivity.json, tuning.json, explainability.json (generated, gitignored)
 ```
 
 ## Definition of done
@@ -96,6 +102,8 @@ pip install -e ".[dev]"             # add ".[notebook]" to run the notebook
 python -m credit_default.train --config config.yaml
 python -m credit_default.compare --config config.yaml
 python -m credit_default.sensitivity --config config.yaml
+python -m credit_default.tune --config config.yaml       # reports; copy chosen values into config by hand
+python -m credit_default.explain --config config.yaml    # needs a trained model
 python -m credit_default.report     # refresh README results block
 pytest tests/ -v
 ```
